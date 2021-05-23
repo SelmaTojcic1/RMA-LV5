@@ -1,30 +1,46 @@
 package com.example.whereisselma
 
 import android.Manifest.permission.ACCESS_FINE_LOCATION
+import android.content.ActivityNotFoundException
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.location.*
+import android.media.AudioManager
+import android.media.SoundPool
+import android.os.Build
 import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
+import android.provider.MediaStore
 import android.util.Log
 import android.widget.Toast
+import com.google.android.gms.location.FusedLocationProviderClient
+import com.google.android.gms.location.LocationServices
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.GoogleMap
 import com.google.android.gms.maps.OnMapReadyCallback
 import com.google.android.gms.maps.SupportMapFragment
 import com.google.android.gms.maps.model.LatLng
+import com.google.android.gms.maps.model.Marker
 import com.google.android.gms.maps.model.MarkerOptions
 import kotlinx.android.synthetic.main.activity_main.*
 import java.io.IOException
 import java.util.*
 
-class MainActivity : AppCompatActivity(), OnMapReadyCallback {
+class MainActivity : AppCompatActivity(), OnMapReadyCallback, GoogleMap.OnMarkerClickListener {
 
     private val locationPermission = ACCESS_FINE_LOCATION
     private val locationRequestCode = 10
     private lateinit var locationManager: LocationManager
     private lateinit var map: GoogleMap
     private lateinit var lastLocation: Location
+    private lateinit var fusedLocationClient: FusedLocationProviderClient
+
+    private lateinit var soundPool: SoundPool
+    private var loaded: Boolean = false
+    var soundMap: HashMap<Int, Int> = HashMap()
+
+    val REQUEST_IMAGE_CAPTURE = 1
 
     private val locationListener = object: LocationListener {
         override fun onProviderEnabled(provider: String) { }
@@ -34,7 +50,6 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
         override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) { }
 
         override fun onLocationChanged(location: Location) {
-            lastLocation = location
             updateLocationDisplay(location)
         }
     }
@@ -43,11 +58,39 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
+
         locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
         trackLocation()
 
         val mapFragment = supportFragmentManager.findFragmentById(R.id.map) as SupportMapFragment
         mapFragment.getMapAsync(this)
+
+        this.loadSounds()
+    }
+
+    private fun loadSounds() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            this.soundPool = SoundPool.Builder().setMaxStreams(10).build()
+        } else {
+            this.soundPool = SoundPool(10, AudioManager.STREAM_MUSIC, 0)
+        }
+        this.soundPool.setOnLoadCompleteListener { _, _, _ -> loaded = true }
+        this.soundMap[R.raw.marker_added] = this.soundPool.load(this, R.raw.marker_added, 1)
+    }
+
+    fun playSound(selectedSound: Int) {
+        val soundID = this.soundMap[selectedSound] ?: 0
+        this.soundPool.play(soundID, 1f, 1f, 1, 0, 1f)
+    }
+
+    private fun dispatchTakePictureIntent() {
+        val takePictureIntent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+        try {
+            startActivityForResult(takePictureIntent, REQUEST_IMAGE_CAPTURE)
+        } catch (e: ActivityNotFoundException) {
+            Toast.makeText(this, "Permission to take photo not granted", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun updateLocationDisplay(location: Location?) {
@@ -97,13 +140,28 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
         val provider = locationManager.getBestProvider(criteria, true)
         val minTime = 1000L
         val minDistance = 10.0F
-        try{
+        try {
             if (provider != null) {
                 locationManager.requestLocationUpdates(provider, minTime, minDistance, locationListener)
+            }
+        } catch (e: SecurityException) {
+            Toast.makeText(this, "Permission not granted", Toast.LENGTH_SHORT).show()
+        }
+
+        try {
+            fusedLocationClient.lastLocation.addOnSuccessListener(this) { location ->
+                if (location != null) {
+                    lastLocation = location
+                    val currentLatLng = LatLng(location.latitude, location.longitude)
+                    placeMarkerOnMap(currentLatLng)
+                    playSound(R.raw.marker_added)
+                    map.animateCamera(CameraUpdateFactory.newLatLngZoom(currentLatLng, 12f))
+                }
             }
         } catch (e: SecurityException){
             Toast.makeText(this, "Permission not granted", Toast.LENGTH_SHORT).show()
         }
+
     }
 
     override fun onRequestPermissionsResult(
@@ -132,11 +190,16 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
             map = googleMap
         }
 
-        val myLocation = LatLng(lastLocation.latitude, lastLocation.longitude)
-        map.addMarker(MarkerOptions().position(myLocation).title("I'm here!"))
         map.mapType = GoogleMap.MAP_TYPE_NORMAL
         map.uiSettings.isZoomControlsEnabled = true
-        map.moveCamera(CameraUpdateFactory.newLatLng(myLocation))
+        map.setOnMarkerClickListener(this)
     }
+
+    private fun placeMarkerOnMap(location: LatLng) {
+        val markerOptions = MarkerOptions().position(location)
+        map.addMarker(markerOptions)
+    }
+
+    override fun onMarkerClick(p0: Marker?): Boolean = false
 
 }
